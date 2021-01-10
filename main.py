@@ -3,93 +3,45 @@ VAE encoding of molecular representations.
 Modified code from https://github.com/pytorch/examples/blob/master/vae/main.py
 """
 
-
-
 from __future__ import print_function
-#import argparse
 import torch
-#import torch.utils.data
-from torch import nn, optim
+from torch import nn, optim, tensor
 from torch.nn import functional as F
-#from torchvision import datasets, transforms
-#from torchvision.utils import save_image
+from torch.nn.parameter import Parameter
 from torch.utils.data import Dataset, DataLoader
 import glob
 import numpy as np
 
 from filereaders import XYZReader
 
-
-#parser = argparse.ArgumentParser(description='VAE MNIST Example')
-#parser.add_argument('--batch-size', type=int, default=128, metavar='N',
-#                    help='input batch size for training (default: 128)')
-#parser.add_argument('--epochs', type=int, default=10, metavar='N',
-#                    help='number of epochs to train (default: 10)')
-#parser.add_argument('--no-cuda', action='store_true', default=False,
-#                    help='disables CUDA training')
-#parser.add_argument('--seed', type=int, default=1, metavar='S',
-#                    help='random seed (default: 1)')
-#parser.add_argument('--log-interval', type=int, default=10, metavar='N',
-#                    help='how many batches to wait before logging training status')
-#args = parser.parse_args()
-#args.cuda = not args.no_cuda and torch.cuda.is_available()
-#
-#torch.manual_seed(args.seed)
-#
-#
-#kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
-#train_loader = torch.utils.data.DataLoader(
-#    datasets.MNIST('../data', train=True, download=True,
-#                   transform=transforms.ToTensor()),
-#    batch_size=args.batch_size, shuffle=True, **kwargs)
-#test_loader = torch.utils.data.DataLoader(
-#    datasets.MNIST('../data', train=False, transform=transforms.ToTensor()),
-#    batch_size=args.batch_size, shuffle=True, **kwargs)
-#
-
-class BifuricationDataset(Dataset):
-    """ Bifurication dataset
-    """
-
-    def __init__(self, transform=None):
-        filenames = glob.glob("./bifurication/*.xyz")
-        self.reader = XYZReader(filenames)
-        self.coordinates = self.reader.coordinates
-        self.transform = transform
-        self.features = self._transform()
-
-    def _transform(self):
-        if self.transform == "distances":
-            distances = np.linalg.norm(self.coordinates[:,:,None] - self.coordinates[:,None,:], axis=3)
-            # ravel
-            return distances.reshape(distances.shape[0], 1, -1).astype(np.float32)
-        else:
-            return self.coordinates
-
-    def __len__(self):
-        return len(self.features)
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        #sample = {'feature': self.features[idx]}
-        sample = self.features[idx]
-        return sample, sample
-
 class VAE(nn.Module):
-    def __init__(self, input_size):
+    def __init__(self, input_size, layer_size=128, dimensions=2, n_layers=1, activation=F.relu,
+            per_sample_variance=True):
         super(VAE, self).__init__()
         self.input_size = input_size
-        self.fc1 = nn.Linear(self.input_size, 128)
-        self.fc21 = nn.Linear(128, 2)
-        self.fc22 = nn.Linear(128, 2)
-        self.fc3 = nn.Linear(2, 128)
-        self.fc4 = nn.Linear(128, self.input_size)
+        self.n_layers = n_layers
+        self.dimensions = dimensions
+        self.per_sample_variance = per_sample_variance
+        self.activation = activation
+        self.fc1 = nn.ModuleList([nn.Linear(self.input_size, layer_size)])
+        self.fc1.extend([nn.Linear(layer_size, layer_size) for _ in range(n_layers - 1)])
+        self.fc21 = nn.Linear(layer_size, dimensions)
+        self.fc22 = nn.Linear(layer_size, dimensions)
+        self.fc3 = nn.ModuleList([nn.Linear(dimensions, layer_size)])
+        self.fc3.extend([nn.Linear(layer_size, layer_size) for _ in range(n_layers - 1)])
+        self.fc4 = nn.Linear(layer_size, self.input_size)
+
+        if self.per_sample_variance:
+            self.fc41 = nn.Linear(layer_size, 1)#self.input_size)
+        else:
+            self.logvar = Parameter(tensor(0.))
 
     def encode(self, x):
-        h1 = F.relu(self.fc1(x))
-        #h1 = self.fc1(x)
+        h1 = self.activation(self.fc1[0](x))
+        h1 = nn.LayerNorm(h1.size()[1:])(h1)
+        for i in range(1, self.n_layers):
+            h1 = self.activation(self.fc1[i](h1))
+            h1 = nn.LayerNorm(h1.size()[1:])(h1)
         return self.fc21(h1), self.fc22(h1)
 
     def reparameterize(self, mu, logvar):
@@ -98,92 +50,104 @@ class VAE(nn.Module):
         return mu + eps*std
 
     def decode(self, z):
-        h3 = F.relu(self.fc3(z))
-        #h3 = self.fc3(z)
-        return F.softplus(self.fc4(h3))
+        h3 = self.activation(self.fc3[0](z))
+        h3 = nn.LayerNorm(h3.size()[1:])(h3)
+        for i in range(1, self.n_layers):
+            h3 = self.activation(self.fc3[i](h3))
+            h3 = nn.LayerNorm(h3.size()[1:])(h3)
+        if self.per_sample_variance:
+            return self.fc4(h3), self.fc41(h3)
+        else:
+            return self.fc4(h3), self.logvar
 
     def forward(self, x):
-        mu, logvar = self.encode(x.view(-1, self.input_size))
-        z = self.reparameterize(mu, logvar)
-        return self.decode(z), mu, logvar
-
+        mu_z, logvar_z = self.encode(x.view(-1, self.input_size))
+        z = self.reparameterize(mu_z, logvar_z)
+        mu_x, logvar_x = self.decode(z)
+        return mu_x, logvar_x, mu_z, logvar_z
 
 class Model(object):
-    def __init__(self, epochs=10, batch_size=20, log_interval=1000):
-        filenames = glob.glob('*.xyz')
-        reader = XYZReader(filenames)
-
-        dataset = BifuricationDataset(transform='distances')
-        self.dataloader = DataLoader(dataset, batch_size=batch_size,
+    def __init__(self, dataset, model=None, epochs=10, batch_size=20, log_interval=1000,
+            learning_rate=3e-3):
+        self.batch_size = batch_size
+        self.dataloader = DataLoader(dataset, batch_size=self.batch_size,
                         shuffle=True, num_workers=0)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = VAE(dataset.features.shape[1]).to(self.device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=3e-3)
+        self.model = model.to(self.device)
+        if self.model is None:
+            self.model = VAE(dataset.features.shape[1]).to(self.device)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         self.epochs = epochs
         self.log_interval = log_interval
 
-    def loss_function(self, recon_x, x, mu, logvar):
+    def loss_function(self, x, mu_x, logvar_x, mu_z, logvar_z):
         """ Reconstruction + KL divergence losses summed over all elements and batch
         """
-        MSE = F.mse_loss(recon_x, x.view(-1, self.model.input_size), reduction='sum')
-
         # see Appendix B from VAE paper:
         # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
         # https://arxiv.org/abs/1312.6114
         # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        return MSE + KLD
+        KLD = -0.5 * torch.sum(1 + logvar_z - mu_z.pow(2) - logvar_z.exp())
 
+        if self.model.per_sample_variance:
+            # Each dimension has same variance within a sample
+            # but each sample can have different variance
+            MSE = torch.sum(F.mse_loss(mu_x, x, reduction='none'), dim=0)
+            nll = 0.5 * torch.sum(logvar_x + MSE / logvar_x.exp())
+        else:
+            # Each dimension and sample has same variance
+            MSE = F.mse_loss(mu_x, x, reduction='sum')
+            nll = 0.5 * (x.shape[0] * logvar_x + MSE / logvar_x.exp())
+            # Requires heavy regularization (gamma prior)
+            a, b = 1, 80
+            nll -= (a - 1) * logvar_x - b * logvar_x.exp()
+
+        return nll + KLD
 
     def fit(self):
         for epoch in range(1, self.epochs + 1):
             self.model.train()
             train_loss = 0
             for batch_idx, (data, _) in enumerate(self.dataloader):
-                data = data.to(self.device)
+                x = data.to(self.device)
                 self.optimizer.zero_grad()
-                recon_batch, mu, logvar = self.model(data)
-                loss = self.loss_function(recon_batch, data, mu, logvar)
+                mu_x, logvar_x, mu_z, logvar_z = self.model(data)
+                loss = self.loss_function(x, mu_x, logvar_x, mu_z, logvar_z)
                 loss.backward()
                 train_loss += loss.item()
                 self.optimizer.step()
                 if (batch_idx+1) % self.log_interval == 0:
                     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                        epoch, batch_idx * len(data), len(dataloader.dataset),
-                        100. * batch_idx / len(dataloader),
-                        loss.item() / len(data)))
+                        epoch, batch_idx * len(x), len(self.dataloader.dataset),
+                        100. * batch_idx / len(self.dataloader),
+                        loss.item() / len(x)))
+                    print("Manifold:", mu_z[0])
+                    print("Variance:", logvar_z[0].exp())
+                    #print("Accuracy:", logvar_x.exp()
 
             print('====> Epoch: {} Average loss: {:.4f}'.format(
-                  epoch, train_loss / len(dataloader.dataset)))
+                  epoch, train_loss / len(self.dataloader.dataset)))
 
-    #def predict(self, 
-    #        with torch.no_grad():
-    #            sample = torch.randn(64, 20).to(self.device)
-    #            sample = model.decode(sample).cpu()
-    #            save_image(sample.view(64, 1, 28, 28),
-    #                       'results/sample_' + str(epoch) + '.png')
-
-
-#TODO optimize activations
-#TODO exponential lr decay
-#TODO try layer/weight norm
-#TODO Optimize layer size
-#TODO normalize input
-#TODO inverse distance matrix / distance embedding / fchl
-#TODO distances to coordinates reconstruction
-if __name__ == "__main__":
-    filenames = glob.glob('*.xyz')
-    reader = XYZReader(filenames)
-
-    dataset = BifuricationDataset(transform='distances')
-    dataloader = DataLoader(dataset, batch_size=10,
-                    shuffle=True, num_workers=0)
-    data_iter = iter(dataloader)
-    a, b = data_iter.next()
-
-    model = Model(epochs=50)
-    model.fit()
+    def set_learning_rate(self, lr):
+        """ Convenience function for updating learning rate
+        """
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
 
 
+    def predict(self, dataset):
+        output = np.zeros((len(dataset), self.model.dimensions * 2 + 1))
+        dataloader = DataLoader(dataset, batch_size=self.batch_size,
+                        shuffle=False, num_workers=0)
+        with torch.no_grad():
+            for batch_idx, (data, _) in enumerate(dataloader):
+                x = data.to(self.device)
+                mu_z, logvar_z = self.model.encode(x.view(-1, self.model.input_size))
+                mu_x, logvar_x = self.model.decode(mu_z)
+                idx = np.arange(batch_idx * self.batch_size, batch_idx * self.batch_size + x.shape[0])
+                output[idx, :self.model.dimensions] = mu_z
+                output[idx, self.model.dimensions:2*self.model.dimensions] = logvar_z
+                output[idx, -1] = logvar_x.flatten()
+        return output
 
