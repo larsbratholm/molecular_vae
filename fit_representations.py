@@ -19,8 +19,8 @@ class RepresentationDataset(Dataset):
             molecules with indices idx
         """
         representations = []
-        nuclear_charges = joblib.load("charges.pkl")
-        training_representations = joblib.load("representations.pkl")
+        nuclear_charges = joblib.load("ml/charges.pkl")
+        training_representations = joblib.load("ml/representations.pkl")
 
         if idx is None:
             idx = range(len(training_representations))
