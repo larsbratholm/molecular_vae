@@ -42,6 +42,7 @@ class VAE(nn.Module):
         for i in range(1, self.n_layers):
             h1 = self.activation(self.fc1[i](h1))
             h1 = nn.LayerNorm(h1.size()[1:])(h1)
+
         return self.fc21(h1), self.fc22(h1)
 
     def reparameterize(self, mu, logvar):
@@ -87,7 +88,6 @@ class Model(object):
         # see Appendix B from VAE paper:
         # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
         # https://arxiv.org/abs/1312.6114
-        # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
         KLD = -0.5 * torch.sum(1 + logvar_z - mu_z.pow(2) - logvar_z.exp())
 
         if self.model.per_sample_variance:
@@ -110,7 +110,7 @@ class Model(object):
             self.model.train()
             train_loss = 0
             for batch_idx, (data, _) in enumerate(self.dataloader):
-                x = data.to(self.device)
+                data = data.to(self.device)
                 self.optimizer.zero_grad()
                 mu_x, logvar_x, mu_z, logvar_z = self.model(data)
                 loss = self.loss_function(x, mu_x, logvar_x, mu_z, logvar_z)
@@ -150,4 +150,3 @@ class Model(object):
                 output[idx, self.model.dimensions:2*self.model.dimensions] = logvar_z
                 output[idx, -1] = logvar_x.flatten()
         return output
-
