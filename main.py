@@ -25,8 +25,6 @@ class VAE(nn.Module):
         Variant 1 and 2 should typically be used for e.g. representations where each feature
         are on the same scale and all features are equally important. Variant 3 should be used
         for input like internal distances, where the scale of each feature is different.
-        Note that variant 1 might be unstable and requires a high degree of regularization,
-        which is currently hard coded.
         """
         super(VAE, self).__init__()
         self.input_size = input_size

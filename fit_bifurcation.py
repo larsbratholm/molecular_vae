@@ -11,8 +11,11 @@ class BifuricationDataset(Dataset):
     """ Bifurication dataset
     """
 
-    def __init__(self, transform=None):
-        filenames = glob.glob("./bifurication/*.xyz")
+    def __init__(self, transform=None, irc_only=False):
+        if irc_only:
+            filenames = glob.glob("./bifurication/*IRC*.xyz")
+        else:
+            filenames = sorted(glob.glob("./bifurication/*.xyz"))
         self.reader = XYZReader(filenames)
         self.coordinates = self.reader.coordinates
         self.transform = transform
@@ -40,10 +43,10 @@ class BifuricationDataset(Dataset):
         return sample, sample
 
 if __name__ == "__main__":
-    dataset = BifuricationDataset(transform='distances')
-    vae_structure = VAE(dataset.features.shape[-1], variant=3, dimensions=2)
+    dataset = BifuricationDataset(transform='distances', irc_only=False)
+    vae_structure = VAE(dataset.features.shape[-1], variant=3, dimensions=2, allow_negative_output=False)
 
-    model = Model(dataset=dataset, model=vae_structure, epochs=500, learning_rate=1e-3, batch_size=100)
+    model = Model(dataset=dataset, model=vae_structure, epochs=250, learning_rate=3e-3, batch_size=100)
     model.fit()
     # only predict IRC
     dataset.features = dataset.features[:266]

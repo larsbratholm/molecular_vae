@@ -74,6 +74,4 @@ if __name__ == "__main__":
     print(3e-4)
     model.epochs = 20
     model.fit()
-    vae_data = model.predict(dataset)
-    joblib.dump(vae_data, "vae_data.pkl", compress=("lzma", 9), protocol=-1)
 
