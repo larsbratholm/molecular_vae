@@ -29,9 +29,10 @@ class RepresentationDataset(Dataset):
             for j in range(len(nuclear_charges[i])):
                 if nuclear_charges[i][j] == nuclear_charge:
                     representations.append(training_representations[i,j])
-                    print(i, j)
         representation_array = np.asarray(representations)
-        #return representation_array.reshape(representation_array.shape[0], 1, -1).astype(np.float32)
+        # mean and scale (shouldn't be needed)
+        representation_array -= np.mean(representation_array)
+        representation_array /= np.std(representation_array)
         return representation_array.astype(np.float32)
 
     def __len__(self):
@@ -45,18 +46,12 @@ class RepresentationDataset(Dataset):
         return sample, sample
 
 
-# TODO layernorm
-# TODO size test
-# TODO predictions
 if __name__ == "__main__":
     dataset = RepresentationDataset(nuclear_charge=1)
-    quit()
-    dataset.features -= np.mean(dataset.features)
-    dataset.features /= np.std(dataset.features)
-    vae_structure = VAE(dataset.features.shape[-1], layer_size=128, n_layers=2, per_sample_variance=True,
+    vae_structure = VAE(dataset.features.shape[-1], layer_size=128, n_layers=2, variant=3,
         dimensions=2, activation=F.leaky_relu)
-    model = Model(dataset=dataset, model=vae_structure, epochs=50, learning_rate=3e-2, batch_size=100,
-        log_interval=10000)
+    model = Model(dataset=dataset, model=vae_structure, epochs=50, learning_rate=3e-3, batch_size=100,
+        log_interval=100)
     print(3e-2)
     model.fit()
 

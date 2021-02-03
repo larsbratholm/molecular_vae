@@ -2,6 +2,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 import joblib
+import glob
+from filereaders import XYZReader
 
 from main import VAE, Model
 
@@ -15,12 +17,15 @@ class BifuricationDataset(Dataset):
         self.coordinates = self.reader.coordinates
         self.transform = transform
         self.features = self._transform()
+        self.features = self.features
 
     def _transform(self):
         if self.transform == "distances":
             distances = np.linalg.norm(self.coordinates[:,:,None] - self.coordinates[:,None,:], axis=3)
-            # ravel
-            return distances.reshape(distances.shape[0], -1).astype(np.float32)
+            indices = np.triu_indices(distances.shape[1], 1)
+            # Get upper triangle items for all samples
+            upper_triangle = np.vstack([item[indices] for item in distances])
+            return upper_triangle.astype(np.float32)
         else:
             return self.coordinates
 
@@ -31,17 +36,16 @@ class BifuricationDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        #sample = {'feature': self.features[idx]}
         sample = self.features[idx]
         return sample, sample
 
 if __name__ == "__main__":
     dataset = BifuricationDataset(transform='distances')
-    vae_structure = VAE(dataset.features.shape[-1])
-    #dataloader = DataLoader(dataset, batch_size=10,
-    #                shuffle=True, num_workers=0)
-    #data_iter = iter(dataloader)
-    #a, b = data_iter.next()
+    vae_structure = VAE(dataset.features.shape[-1], variant=3, dimensions=2)
 
-    model = Model(dataset=dataset, model=vae_structure, epochs=20, learning_rate=1e-3)
+    model = Model(dataset=dataset, model=vae_structure, epochs=500, learning_rate=1e-3, batch_size=100)
     model.fit()
+    # only predict IRC
+    dataset.features = dataset.features[:266]
+    vae_data = model.predict(dataset)
+    joblib.dump(vae_data, "vae_data.pkl", compress=("lzma", 9), protocol=-1)
